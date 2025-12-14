@@ -299,3 +299,45 @@ EXCEPTION
 END;
 /
 
+
+--test function
+SELECT id, score, grade, status FROM examresults;
+
+INSERT INTO examresults (id, registration_id, score, grade, status)
+VALUES (1, 1, 85, NULL, NULL);
+COMMIT;
+
+SET SERVEROUTPUT ON;
+
+DECLARE
+  v_g VARCHAR2(2);
+BEGIN
+  v_g := FN_CALC_GRADE(1);
+  DBMS_OUTPUT.PUT_LINE('Calculated Grade = ' || v_g);
+END;
+/
+
+
+
+--(4) Automated Warning Issuance:
+
+CREATE SEQUENCE WARNINGS_SEQ START WITH 1 INCREMENT BY 1;
+
+CREATE OR REPLACE PROCEDURE PR_ISSUE_WARNINGS
+IS
+BEGIN
+    INSERT INTO warnings (id, student_id, warning_reason, warning_date)
+    SELECT WARNINGS_SEQ.NEXTVAL,
+           r.student_id,
+           'Failing in two or more courses',
+           SYSDATE
+    FROM register r
+    JOIN examresults er
+      ON er.registration_id = r.id
+    WHERE er.status = 'Fail'
+    GROUP BY r.student_id
+    HAVING COUNT(*) >= 2;
+
+    COMMIT;
+END;
+/
