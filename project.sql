@@ -131,3 +131,171 @@ GRANT INSERT, SELECT ON USER1.REGISTER TO USER2;
 
 GRANT SELECT, INSERT ON USER1.PROFESSORS TO USER2;
 
+
+sqlplus USER2/"u2"@localhost:1521/XEPDB1
+
+
+INSERT INTO USER1.PROFESSORS (id, name, department) VALUES (1, 'Dr. Ahmed', 'DS'); 
+INSERT INTO USER1.PROFESSORS (id, name, department) VALUES (2, 'Dr. Elsayed',  'RSE'); 
+
+INSERT INTO USER1.COURSES (id, name, professor_id, credit_hours, prerequisite_course_id)
+VALUES (101, 'Databases', 1, 3, NULL);
+
+INSERT INTO USER1.COURSES (id, name, professor_id, credit_hours, prerequisite_course_id)
+VALUES (102, 'Adv Databases', 1, 3, 101); 
+
+INSERT INTO USER1.COURSES (id, name, professor_id, credit_hours, prerequisite_course_id)
+VALUES (103, 'AI For Beginners', 2, 3, NULL); 
+
+INSERT INTO USER1.STUDENTS (id, name, academic_status, total_credits)
+VALUES (1, 'Amr',   'Active', 0);
+
+INSERT INTO USER1.STUDENTS (id, name, academic_status, total_credits)
+VALUES (2, 'Doha',  'Active', 0);
+
+INSERT INTO USER1.STUDENTS (id, name, academic_status, total_credits)
+VALUES (3, 'Kareem',  'Active', 0);
+
+INSERT INTO USER1.STUDENTS (id, name, academic_status, total_credits)
+VALUES (4, 'Abdallah',  'Active', 0);
+
+INSERT INTO USER1.STUDENTS (id, name, academic_status, total_credits)
+VALUES (5, 'Youssef',  'Active', 0);
+
+
+
+INSERT INTO USER1.REGISTER (id, student_id, course_id) VALUES (1, 1, 101);
+INSERT INTO USER1.REGISTER (id, student_id, course_id) VALUES (2, 2, 101);
+INSERT INTO USER1.REGISTER (id, student_id, course_id) VALUES (3, 3, 103);
+INSERT INTO USER1.REGISTER (id, student_id, course_id) VALUES (4, 4, 101);
+INSERT INTO USER1.REGISTER (id, student_id, course_id) VALUES (5, 5, 103);
+
+COMMIT;
+
+SELECT COUNT(*) FROM USER1.STUDENTS;
+SELECT COUNT(*) FROM USER1.REGISTER;
+
+sqlplus USER1/"u1"@localhost:1521/XEPDB1
+
+CREATE SEQUENCE AUDITTRAIL_SEQ START WITH 1 INCREMENT BY 1;
+
+
+CREATE OR REPLACE TRIGGER TRG_CHECK_PREREQ
+BEFORE INSERT ON REGISTER
+FOR EACH ROW
+DECLARE
+    v_prereq_id  COURSES.PREREQUISITE_COURSE_ID%TYPE;
+    v_count      NUMBER;
+BEGIN
+    SELECT prerequisite_course_id
+    INTO v_prereq_id
+    FROM courses
+    WHERE id = :NEW.course_id;
+
+    IF v_prereq_id IS NOT NULL THEN
+        SELECT COUNT(*)
+        INTO v_count
+        FROM register r
+        JOIN examresults er
+          ON er.registration_id = r.id
+        WHERE r.student_id = :NEW.student_id
+          AND r.course_id  = v_prereq_id
+          AND er.status    = 'Pass';
+
+        IF v_count = 0 THEN
+            RAISE_APPLICATION_ERROR(
+                -20001,
+                'Registration blocked: prerequisite course not completed.'
+            );
+        END IF;
+    END IF;
+END;
+/
+
+
+
+CREATE OR REPLACE TRIGGER TRG_REGISTER_AUDIT_INS
+BEFORE INSERT ON REGISTER
+FOR EACH ROW
+BEGIN
+    INSERT INTO audittrail (id, table_name, operation, old_data, new_data, log_date)
+    VALUES (
+        AUDITTRAIL_SEQ.NEXTVAL,
+        'REGISTER',
+        'INSERT',
+        NULL,
+        TO_CLOB('id=' || :NEW.id || '; student_id=' || :NEW.student_id || '; course_id=' || :NEW.course_id),
+        SYSTIMESTAMP
+    );
+END;
+/
+
+
+CREATE OR REPLACE TRIGGER TRG_REGISTER_AUDIT_DEL
+BEFORE DELETE ON REGISTER
+FOR EACH ROW
+BEGIN
+    INSERT INTO audittrail (id, table_name, operation, old_data, new_data, log_date)
+    VALUES (
+        AUDITTRAIL_SEQ.NEXTVAL,
+        'REGISTER',
+        'DELETE',
+        TO_CLOB('id=' || :OLD.id || '; student_id=' || :OLD.student_id || '; course_id=' || :OLD.course_id),
+        NULL,
+        SYSTIMESTAMP
+    );
+END;
+/
+
+
+--test triggers
+SELECT trigger_name, status
+FROM user_triggers
+WHERE trigger_name IN ('TRG_CHECK_PREREQ','TRG_REGISTER_AUDIT_INS','TRG_REGISTER_AUDIT_DEL');
+
+
+
+CREATE OR REPLACE FUNCTION FN_CALC_GRADE (p_examresult_id IN NUMBER)
+RETURN VARCHAR2
+IS
+    v_score NUMBER;
+    v_grade VARCHAR2(2);
+    v_status VARCHAR2(10);
+BEGIN
+    SELECT score
+    INTO v_score
+    FROM examresults
+    WHERE id = p_examresult_id
+    FOR UPDATE;
+
+    IF v_score BETWEEN 90 AND 100 THEN
+        v_grade := 'A';
+    ELSIF v_score BETWEEN 80 AND 89 THEN
+        v_grade := 'B';
+    ELSIF v_score BETWEEN 70 AND 79 THEN
+        v_grade := 'C';
+    ELSIF v_score BETWEEN 60 AND 69 THEN
+        v_grade := 'D';
+    ELSE
+        v_grade := 'F';
+    END IF;
+
+    IF v_grade = 'F' THEN
+        v_status := 'Fail';
+    ELSE
+        v_status := 'Pass';
+    END IF;
+
+    UPDATE examresults
+    SET grade = v_grade,
+        status = v_status
+    WHERE id = p_examresult_id;
+
+    RETURN v_grade;
+
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        RAISE_APPLICATION_ERROR(-20010, 'ExamResults ID not found.');
+END;
+/
+
